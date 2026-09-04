@@ -1,0 +1,10 @@
+# macOS
+.DS_Store
+
+# 파이썬
+__pycache__/
+*.pyc
+
+# 로컬 개발 전용
+.superpowers/
+docs/
