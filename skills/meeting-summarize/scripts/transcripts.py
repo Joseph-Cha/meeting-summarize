@@ -4,6 +4,7 @@
 사용:
   transcripts.py list [DIR]   DIR(기본: iCloud 회의록 폴더)의 txt를 표로 나열
   transcripts.py meta FILE    파일 하나의 일시·작성자·화자 통계를 표로 출력
+  transcripts.py check MD     정리된 회의록(md)의 분량 예산·녹취 말투를 점검(F-04)
 
 녹취록 헤더 형식(1~3행):
   <제목>
@@ -109,10 +110,81 @@ def cmd_meta(p):
     return 0
 
 
+BUDGET = {"lines": 80, "chars": 3500, "tables": 2, "table_rows": 8,
+          "bullets_per_sub": 5, "bullets_6": 6, "rows_7": 8, "bullets_8": 4}
+SPOKEN = ("거든요", "잖아요", "그러니까", "약간 ", " 이제 ", "그쵸", "네네", "어쨌든", "막 ")
+
+
+def cmd_check(p):
+    """회의록 md의 분량·말투 점검. 위반 0건이면 exit 0, 있으면 exit 1."""
+    text = p.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    issues = []
+    nonblank = [l for l in lines if l.strip()]
+    chars = sum(len(l.replace(" ", "")) for l in nonblank)
+    if len(nonblank) > BUDGET["lines"]:
+        issues.append(f"전체 {len(nonblank)}줄 > {BUDGET['lines']}줄")
+    if chars > BUDGET["chars"]:
+        issues.append(f"전체 {chars}자(공백 제외) > {BUDGET['chars']}자")
+    # 섹션 나누기
+    sec, cur = {}, None
+    for l in lines:
+        m = re.match(r"^(#{2,3})\s+(\S+)", l)
+        if m:
+            cur = m.group(2)
+            sec[cur] = []
+        elif cur:
+            sec[cur].append(l)
+    tables = 0
+    for name, body in sec.items():
+        rows = [l for l in body if l.startswith("|") and not re.match(r"^\|\s*-", l)]
+        if rows:
+            tables += 1
+            if not name.startswith("3.") and len(rows) - 1 > BUDGET["table_rows"]:
+                issues.append(f"{name} 표 {len(rows)-1}행 > {BUDGET['table_rows']}행")
+        bullets = [l for l in body if re.match(r"^\s*[*-]\s", l)]
+        if name.startswith("5-") and len(bullets) > BUDGET["bullets_per_sub"]:
+            issues.append(f"{name} 불릿 {len(bullets)}개 > {BUDGET['bullets_per_sub']}개")
+        if name.startswith("6.") and len(bullets) > BUDGET["bullets_6"]:
+            issues.append(f"6번 불릿 {len(bullets)}개 > {BUDGET['bullets_6']}개")
+        if name.startswith("7.") and rows and len(rows) - 1 > BUDGET["rows_7"]:
+            issues.append(f"7번 {len(rows)-1}행 > {BUDGET['rows_7']}행")
+        if name.startswith("8.") and len(bullets) > BUDGET["bullets_8"]:
+            issues.append(f"8번 불릿 {len(bullets)}개 > {BUDGET['bullets_8']}개")
+        for b in bullets:
+            sents = [s for s in re.split(r"[.!?]\s", b) if s.strip()]
+            if len(sents) >= 4 or len(b.strip()) > 160:
+                issues.append(f"{name} 불릿이 길다(4문장 이상 또는 160자 초과): {b.strip()[:50]}…")
+            for w in SPOKEN:
+                if w in b:
+                    issues.append(f"{name} 녹취 말투 '{w.strip()}': {b.strip()[:50]}…")
+                    break
+    if tables - (1 if any(k.startswith("3.") for k in sec) else 0) > BUDGET["tables"]:
+        issues.append(f"표 {tables}개(참석대상 제외 {tables-1}) > {BUDGET['tables']}개")
+    if "전문 별도 공유" not in text:
+        issues.append("제목 아래 '녹취록: … (전문 별도 공유)' 줄 없음")
+    quotes = text.count("「") + text.count("\u201c")
+    if quotes > 3:
+        issues.append(f"인용 {quotes}곳(「」·“”) > 3곳 — 발언 인용은 스토리 훅 1~2개만, 나머지는 결론형으로")
+    print(f"파일: {p}\n줄(공백 제외): {len(nonblank)} / 글자(공백 제외): {chars} / 표: {tables}")
+    if not issues:
+        print("분량·말투 점검: 위반 없음")
+        return 0
+    print(f"분량·말투 점검: 위반 {len(issues)}건")
+    for i in issues:
+        print(" - " + i)
+    return 1
+
+
 def main(argv):
-    if len(argv) < 2 or argv[1] not in ("list", "meta"):
+    if len(argv) < 2 or argv[1] not in ("list", "meta", "check"):
         print(__doc__)
         return 2
+    if argv[1] == "check":
+        if len(argv) < 3 or not Path(argv[2]).expanduser().is_file():
+            print("check MD 필요(파일 없음)")
+            return 2
+        return cmd_check(Path(argv[2]).expanduser())
     if argv[1] == "list":
         d = Path(argv[2]).expanduser() if len(argv) > 2 else DEFAULT_DIR
         if not d.is_dir():
