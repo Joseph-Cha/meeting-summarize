@@ -2,15 +2,15 @@
 """회의 녹취록(화자 분리 txt) 목록·메타 추출.
 
 사용:
-  transcripts.py list [DIR]   DIR(기본: iCloud 회의록 폴더)의 txt를 표로 나열
+  transcripts.py list [DIR]   DIR(기본: iCloud 회의록 폴더)의 txt를 표로 나열, 녹취록 없는 녹음(m4a 등)은 전사 대상으로 표시
   transcripts.py meta FILE    파일 하나의 일시·작성자·화자 통계를 표로 출력
   transcripts.py check MD     정리된 회의록(md)의 분량 예산·녹취 말투를 점검(F-04)
 
-녹취록 헤더 형식(1~3행):
+녹취록 헤더 형식(1~3행) — transcribe.sh 가 만드는 형식이며, 같은 구조의 txt는 출처와 무관하게 읽는다:
   <제목>
-  YYYY.MM.DD 요일 오전|오후 H:MM ・ [N시간] [N분] [N초]
+  YYYY.MM.DD 요일 오전|오후 H:MM ・ [N시간] [N분] [N초] [(시작 시각 추정)]
   <작성자>
-본문은 "참석자 N MM:SS" 줄 뒤에 발화가 이어진다.
+본문은 "참석자 N MM:SS" 줄(1시간부터 H:MM:SS) 뒤에 발화가 이어진다.
 """
 import re
 import sys
@@ -31,16 +31,18 @@ def parse_header(lines):
     """헤더 3행 → dict. 형식이 다르면 None 필드로 둔다(추측하지 않는다)."""
     title = lines[0].strip() if lines else ""
     author = lines[2].strip() if len(lines) > 2 else ""
-    m = HEADER_RE.match(lines[1].strip()) if len(lines) > 1 else None
+    line2 = lines[1].strip() if len(lines) > 1 else ""
+    m = HEADER_RE.match(line2) if line2 else None
+    estimated = "추정" in line2  # transcribe.sh 가 시작 시각을 추정했을 때 붙이는 표시
     if not m:
         return {"title": title, "author": author, "start": None, "minutes": None,
-                "weekday": None}
+                "weekday": None, "estimated": estimated}
     y, mo, d, wd, ampm, h, mi, hh, mm, ss = m.groups()
     h = int(h) % 12 + (12 if ampm == "오후" else 0)
     start = datetime(int(y), int(mo), int(d), h, int(mi))
     secs = int(hh or 0) * 3600 + int(mm or 0) * 60 + int(ss or 0)
     return {"title": title, "author": author, "start": start,
-            "minutes": round(secs / 60), "weekday": wd}
+            "minutes": round(secs / 60), "weekday": wd, "estimated": estimated}
 
 
 def fmt_when(h):
@@ -49,8 +51,11 @@ def fmt_when(h):
         return "헤더에서 일시를 읽지 못함(녹취 본문·사용자에게 확인)"
     s = h["start"]
     e = s + timedelta(minutes=h["minutes"] or 0)
-    return (f"{s.year}년 {s.month}월 {s.day}일({h['weekday']}) "
+    when = (f"{s.year}년 {s.month}월 {s.day}일({h['weekday']}) "
             f"{s:%H:%M} ~ {e:%H:%M} (약 {h['minutes']}분)")
+    if h.get("estimated"):
+        when += " (시작 시각 추정 — 확인 필요)"
+    return when
 
 
 def speaker_stats(lines):
@@ -71,10 +76,14 @@ def speaker_stats(lines):
     return stats
 
 
+AUDIO_EXT = {".m4a", ".mp3", ".wav", ".aac", ".mp4", ".mov"}
+
+
 def cmd_list(d):
     files = sorted(p for p in d.iterdir() if p.suffix.lower() == ".txt")
     if not files:
-        print(f"txt 파일 없음: {d}")
+        audio = [p.name for p in sorted(d.iterdir()) if p.suffix.lower() in AUDIO_EXT]
+        print(f"txt 파일 없음: {d}" + (f"\n녹음만 있음(전사 필요): " + ", ".join(audio) if audio else ""))
         return 1
     print(f"폴더: {d}")
     print("(meta에는 아래 '파일' 열의 이름만 넘겨도 된다 — 이 폴더에서 찾는다)\n")
@@ -86,10 +95,12 @@ def cmd_list(d):
         mins = f"{h['minutes']}분" if h["minutes"] is not None else "?"
         print(f"| {i} | {p.name} | {h['title']} | {when} | {mins} | {h['author']} | "
               f"{p.stat().st_size // 1024}KB |")
-    others = [p.name for p in d.iterdir() if p.suffix.lower() != ".txt"
-              and not p.name.startswith(".")]
-    if others:
-        print("\n녹취록이 아닌 파일(오디오 등, 정리 대상 아님): " + ", ".join(others))
+    stems = {p.stem for p in files}
+    audio = [p for p in sorted(d.iterdir()) if p.suffix.lower() in AUDIO_EXT and p.stem not in stems]
+    if audio:
+        print("\n녹취록이 없는 녹음(전사 필요 — `scripts/transcribe.sh \"<파일>\" --start \"YYYY-MM-DD HH:MM\" --speakers N`):")
+        for p in audio:
+            print(f"- {p.name} ({p.stat().st_size // 1048576}MB)")
     return 0
 
 

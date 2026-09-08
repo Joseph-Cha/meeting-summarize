@@ -9,3 +9,7 @@ __pycache__/
 .superpowers/
 docs/
 .claude/
+
+# 녹음·녹취록 샘플과 PoC 폴더(연구 기록·모델·중간 산출물) — 저장소에 넣지 않는다
+src/
+poc/

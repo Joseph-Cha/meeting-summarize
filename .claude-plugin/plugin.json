@@ -1,7 +1,7 @@
 {
   "name": "meeting-summarize",
   "version": "0.2.1",
-  "description": "회의 녹취록(화자 분리 txt)을 8항목 내부 회의록(일시·장소·참석대상·주요 안건·협의 사항·특이사항·Follow-Up·소감)으로 정리합니다. 리뷰 피드백을 규칙으로 누적해 다음 회의록에 반영합니다.",
+  "description": "회의 녹음 파일(m4a)이나 화자 분리 녹취록(txt)을 8항목 내부 회의록(일시·장소·참석대상·주요 안건·협의 사항·특이사항·Follow-Up·소감)으로 정리합니다. 녹음은 기기 안에서 녹취록으로 전환(WhisperKit)한 뒤 요약하며, 리뷰 피드백을 규칙으로 누적해 다음 회의록에 반영합니다.",
   "author": {
     "name": "Joseph Cha",
     "url": "https://github.com/Joseph-Cha"
@@ -13,6 +13,8 @@
     "meeting",
     "minutes",
     "transcript",
+    "transcription",
+    "diarization",
     "korean",
     "summary",
     "follow-up"
