@@ -13,3 +13,7 @@ docs/
 # 녹음·녹취록 샘플과 PoC 폴더(연구 기록·모델·중간 산출물) — 저장소에 넣지 않는다
 src/
 poc/
+
+# 조직 정보는 데이터 폴더(~/.claude/meeting-summarize)에만 둔다 — 실수로 스킬 폴더에 생겨도 커밋되지 않게 막는다
+skills/meeting-summarize/references/context.md
+skills/meeting-summarize/references/feedback.md

@@ -6,7 +6,7 @@
 #                    [--out 경로] [--force] [--work DIR] [--model 이름]
 #   --start    녹음 시작 시각. 없으면 파일 생성 시각−길이로 추정하고 헤더에 "(시작 시각 추정)" 표시
 #   --speakers 참석자 수(아는 경우 지정 권장). 없으면 자동 추정
-#   --author   녹음자(헤더 3행, 기본 $USER_NAME 또는 "녹음자")
+#   --author   녹음자(헤더 3행). 기본: transcripts.py config 의 author → $USER_NAME → "녹음자"
 #   --model    WhisperKit 모델(기본 large-v3-v20240930_turbo). 첫 실행 때 약 1.6GB + 화자 분리 모델 자동 다운로드
 # 종료 코드: 0 성공 / 1 처리 실패 / 2 사용법·의존성·기존 파일
 set -euo pipefail
@@ -15,7 +15,8 @@ die() { echo "오류: $1" >&2; exit "${2:-1}"; }
 
 [ $# -ge 1 ] || { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 AUDIO="$1"; shift
-START=""; SPEAKERS=""; AUTHOR="${USER_NAME:-녹음자}"; TITLE=""; OUT=""; FORCE=0; WORK=""; MODEL="large-v3-v20240930_turbo"
+CFG_AUTHOR="$(python3 "$HERE/transcripts.py" config get author 2>/dev/null || true)"
+START=""; SPEAKERS=""; AUTHOR="${CFG_AUTHOR:-${USER_NAME:-녹음자}}"; TITLE=""; OUT=""; FORCE=0; WORK=""; MODEL="large-v3-v20240930_turbo"
 while [ $# -gt 0 ]; do
   case "$1" in
     --start) START="$2"; shift 2 ;;

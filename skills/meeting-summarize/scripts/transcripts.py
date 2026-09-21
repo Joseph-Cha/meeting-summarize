@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
-"""회의 녹취록(화자 분리 txt) 목록·메타 추출.
+"""회의 녹취록(화자 분리 txt) 목록·메타 추출, 회의록 점검, 데이터 폴더 설정.
 
 사용:
-  transcripts.py list [DIR]   DIR(기본: iCloud 회의록 폴더)의 txt를 표로 나열, 녹취록 없는 녹음(m4a 등)은 전사 대상으로 표시
+  transcripts.py list [DIR]   DIR(기본: config의 input_dir)의 txt를 표로 나열, 녹취록 없는 녹음(m4a 등)은 전사 대상으로 표시
   transcripts.py meta FILE    파일 하나의 일시·작성자·화자 통계를 표로 출력
-  transcripts.py check MD     정리된 회의록(md)의 분량 예산·녹취 말투를 점검(F-04)
+  transcripts.py check MD     정리된 회의록(md)의 분량 예산·녹취 말투를 점검(R-04)
+  transcripts.py config                  데이터 폴더 위치와 context.md·feedback.md·설정 상태
+  transcripts.py config get KEY          설정값 하나(없으면 빈 줄)
+  transcripts.py config set KEY VALUE    KEY: input_dir | author | storytelling(on/off)
+
+데이터 폴더(조직 정보·피드백 규칙·설정)는 스킬 폴더 밖에 둔다 — 기본 ~/.claude/meeting-summarize,
+환경변수 MEETING_SUMMARIZE_HOME 으로 바꾼다. 플러그인 업데이트가 덮어쓰지 않고, 배포물에 조직 정보가 섞이지 않는다.
 
 녹취록 헤더 형식(1~3행) — transcribe.sh 가 만드는 형식이며, 같은 구조의 txt는 출처와 무관하게 읽는다:
   <제목>
@@ -12,14 +18,18 @@
   <작성자>
 본문은 "참석자 N MM:SS" 줄(1시간부터 H:MM:SS) 뒤에 발화가 이어진다.
 """
+import json
+import os
 import re
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-DEFAULT_DIR = Path.home() / (
-    "Library/Mobile Documents/iCloud~is~workflow~my~workflows/Documents/회의록"
-)
+CONFIG_KEYS = {
+    "input_dir": "녹취록·녹음 기본 폴더",
+    "author": "회의록 작성자(녹음자) 기본값",
+    "storytelling": "대외 미팅 5-1 스토리텔링(on/off)",
+}
 HEADER_RE = re.compile(
     r"^(\d{4})\.(\d{2})\.(\d{2})\s+(\S)\s+(오전|오후)\s+(\d{1,2}):(\d{2})\s*・\s*"
     r"(?:(\d+)시간\s*)?(?:(\d+)분\s*)?(?:(\d+)초)?"
@@ -76,6 +86,71 @@ def speaker_stats(lines):
     return stats
 
 
+def data_home():
+    env = os.environ.get("MEETING_SUMMARIZE_HOME")
+    return Path(env).expanduser() if env else Path.home() / ".claude" / "meeting-summarize"
+
+
+def load_config():
+    p = data_home() / "config.json"
+    if not p.is_file():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except ValueError:
+        return {}
+
+
+def input_dir():
+    d = load_config().get("input_dir")
+    return Path(d).expanduser() if d else None
+
+
+def cmd_config(args):
+    home = data_home()
+    cfg = load_config()
+    if args[:1] == ["get"] and len(args) == 2:
+        print(cfg.get(args[1], ""))
+        return 0
+    if args[:1] == ["set"] and len(args) == 3:
+        key, value = args[1], args[2]
+        if key not in CONFIG_KEYS:
+            print(f"알 수 없는 설정: {key} (가능: {', '.join(CONFIG_KEYS)})")
+            return 2
+        if key == "storytelling" and value not in ("on", "off"):
+            print("storytelling 은 on 또는 off")
+            return 2
+        if key == "input_dir":
+            d = Path(value).expanduser()
+            if not d.is_dir():
+                print(f"폴더 없음: {d}")
+                return 2
+            value = str(d.resolve()) if not d.is_absolute() else str(d)
+        cfg[key] = value
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "config.json").write_text(
+            json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        print(f"{key} = {value}")
+        return 0
+    if args:
+        print("사용: config | config get KEY | config set KEY VALUE")
+        return 2
+    print(f"데이터 폴더: {home} (환경변수 MEETING_SUMMARIZE_HOME 으로 변경)")
+    ctx, fb, ex = home / "context.md", home / "feedback.md", home / "example.md"
+    print("- context.md: " + ("있음" if ctx.is_file() else "없음 — 첫 실행 설정 필요(SKILL.md '첫 실행')"))
+    if fb.is_file():
+        n = len(re.findall(r"^## F-\d+", fb.read_text(encoding="utf-8", errors="replace"), re.M))
+        print(f"- feedback.md: 있음(규칙 {n}건)")
+    else:
+        print("- feedback.md: 없음 — 첫 피드백 때 만든다(기본 규칙 references/rules.md 만 적용)")
+    print("- example.md: " + ("있음 — 스킬 기본 예시보다 우선" if ex.is_file() else "없음 — 스킬 기본 예시 사용"))
+    print("설정(config.json):")
+    for key, desc in CONFIG_KEYS.items():
+        default = "on(기본)" if key == "storytelling" else "미설정"
+        print(f"- {key}: {cfg.get(key) or default}  # {desc}")
+    return 0
+
+
 AUDIO_EXT = {".m4a", ".mp3", ".wav", ".aac", ".mp4", ".mov"}
 
 
@@ -127,7 +202,7 @@ SPOKEN = ("거든요", "잖아요", "그러니까", "약간 ", " 이제 ", "그�
 
 
 def cmd_check(p):
-    """회의록 md의 분량·말투 점검. 위반 0건이면 exit 0, 있으면 exit 1."""
+    """회의록 md의 분량·말투 점검(R-04). 위반 0건이면 exit 0, 있으면 exit 1."""
     text = p.read_text(encoding="utf-8")
     lines = text.splitlines()
     issues = []
@@ -177,7 +252,9 @@ def cmd_check(p):
     quotes = text.count("「") + text.count("\u201c")
     if quotes > 3:
         issues.append(f"인용 {quotes}곳(「」·“”) > 3곳 — 발언 인용은 스토리 훅 1~2개만, 나머지는 결론형으로")
-    print(f"파일: {p}\n줄(공백 제외): {len(nonblank)} / 글자(공백 제외): {chars} / 표: {tables}")
+    body_tables = tables - (1 if any(k.startswith("3.") for k in sec) else 0)
+    print(f"파일: {p}\n줄(공백 제외): {len(nonblank)} / 글자(공백 제외): {chars} / "
+          f"표: {body_tables}개(참석대상 제외, 상한 {BUDGET['tables']})")
     if not issues:
         print("분량·말투 점검: 위반 없음")
         return 0
@@ -188,16 +265,22 @@ def cmd_check(p):
 
 
 def main(argv):
-    if len(argv) < 2 or argv[1] not in ("list", "meta", "check"):
+    if len(argv) < 2 or argv[1] not in ("list", "meta", "check", "config"):
         print(__doc__)
         return 2
+    if argv[1] == "config":
+        return cmd_config(argv[2:])
     if argv[1] == "check":
         if len(argv) < 3 or not Path(argv[2]).expanduser().is_file():
             print("check MD 필요(파일 없음)")
             return 2
         return cmd_check(Path(argv[2]).expanduser())
     if argv[1] == "list":
-        d = Path(argv[2]).expanduser() if len(argv) > 2 else DEFAULT_DIR
+        d = Path(argv[2]).expanduser() if len(argv) > 2 else input_dir()
+        if d is None:
+            print("기본 입력 폴더 미설정 — `list <폴더>`로 지정하거나 "
+                  "`config set input_dir <폴더>`로 기본값을 정한다")
+            return 2
         if not d.is_dir():
             print(f"폴더 없음: {d}")
             return 2
@@ -206,10 +289,11 @@ def main(argv):
         print("meta FILE 필요")
         return 2
     p = Path(argv[2]).expanduser()
-    if not p.is_file() and not p.is_absolute() and (DEFAULT_DIR / p).is_file():
-        p = DEFAULT_DIR / p  # 파일명만 받으면 기본 폴더에서 찾는다
+    base = input_dir()
+    if not p.is_file() and not p.is_absolute() and base and (base / p).is_file():
+        p = base / p  # 파일명만 받으면 기본 폴더에서 찾는다
     if not p.is_file():
-        print(f"파일 없음: {p} (기본 폴더에도 없음: {DEFAULT_DIR})")
+        print(f"파일 없음: {p}" + (f" (기본 폴더에도 없음: {base})" if base else ""))
         return 2
     return cmd_meta(p)
 

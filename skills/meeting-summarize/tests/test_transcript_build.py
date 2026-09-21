@@ -57,11 +57,11 @@ class RenderTests(unittest.TestCase):
         return tb.build_blocks(units)
 
     def test_header_and_timestamps(self):
-        text, order, n = tb.render(self.blocks(), "제목", datetime(2026, 9, 4, 9, 37), "구성원A", 6167)
+        text, order, n = tb.render(self.blocks(), "제목", datetime(2026, 9, 4, 9, 37), "홍길동", 6167)
         lines = text.splitlines()
         self.assertEqual(lines[0], "제목")
         self.assertEqual(lines[1], "2026.09.04 금 오전 9:37 ・ 102분 47초")  # 60분 넘어도 '시간' 없음, 0 채움 없음
-        self.assertEqual(lines[2], "구성원A")
+        self.assertEqual(lines[2], "홍길동")
         self.assertEqual(lines[3:5], ["", ""])
         self.assertEqual(lines[5], "참석자 1 00:00")
         self.assertNotIn("clovanote", text)
@@ -89,7 +89,7 @@ class RenderTests(unittest.TestCase):
         self.assertEqual([l for l, _ in tb.block_lines(b)], ["첫 문장. 둘째.", "셋째."])
 
     def test_roundtrip_with_transcripts_py(self):
-        text, _, _ = tb.render(self.blocks(), "회의", datetime(2026, 9, 4, 9, 37), "구성원A", 6167)
+        text, _, _ = tb.render(self.blocks(), "회의", datetime(2026, 9, 4, 9, 37), "홍길동", 6167)
         h = transcripts.parse_header(text.splitlines())
         self.assertEqual(h["start"], datetime(2026, 9, 4, 9, 37))
         self.assertEqual(h["minutes"], 103)
