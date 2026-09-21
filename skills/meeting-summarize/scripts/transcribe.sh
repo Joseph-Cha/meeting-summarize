@@ -3,20 +3,22 @@
 #   ffmpeg(16kHz mono wav) → whisperkit-cli transcribe(ASR, 단어 타임스탬프) → whisperkit-cli diarize(화자 분리)
 #   → transcript_build.py(병합·정리·형식) → <녹음 폴더>/<녹음명>.txt
 # 사용: transcribe.sh <녹음 파일> [--start "YYYY-MM-DD HH:MM"] [--speakers N] [--author 이름] [--title 제목]
-#                    [--out 경로] [--force] [--work DIR] [--model 이름]
+#                    [--out 경로] [--force] [--work DIR] [--model 이름] [--vocab "단어1, 단어2"]
 #   --start    녹음 시작 시각. 없으면 파일 생성 시각−길이로 추정하고 헤더에 "(시작 시각 추정)" 표시
 #   --speakers 참석자 수(아는 경우 지정 권장). 없으면 자동 추정
 #   --author   녹음자(헤더 3행). 기본: transcripts.py config 의 author → $USER_NAME → "녹음자"
+#   --vocab    (실험) 고유명사 힌트. 쉼표로 나열한 정표기를 디코딩 프롬프트로 넘긴다. 기본은 끔 —
+#              시험에서 일부 단어는 교정됐지만 그대로이거나 더 나빠진 단어도 있었다. 결과를 힌트 없는 전사와 비교해 쓴다
 #   --model    WhisperKit 모델(기본 large-v3-v20240930_turbo). 첫 실행 때 약 1.6GB + 화자 분리 모델 자동 다운로드
 # 종료 코드: 0 성공 / 1 처리 실패 / 2 사용법·의존성·기존 파일
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 die() { echo "오류: $1" >&2; exit "${2:-1}"; }
 
-[ $# -ge 1 ] || { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+[ $# -ge 1 ] || { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 AUDIO="$1"; shift
 CFG_AUTHOR="$(python3 "$HERE/transcripts.py" config get author 2>/dev/null || true)"
-START=""; SPEAKERS=""; AUTHOR="${CFG_AUTHOR:-${USER_NAME:-녹음자}}"; TITLE=""; OUT=""; FORCE=0; WORK=""; MODEL="large-v3-v20240930_turbo"
+START=""; SPEAKERS=""; AUTHOR="${CFG_AUTHOR:-${USER_NAME:-녹음자}}"; TITLE=""; OUT=""; FORCE=0; WORK=""; VOCAB=""; MODEL="large-v3-v20240930_turbo"
 while [ $# -gt 0 ]; do
   case "$1" in
     --start) START="$2"; shift 2 ;;
@@ -26,6 +28,7 @@ while [ $# -gt 0 ]; do
     --out) OUT="$2"; shift 2 ;;
     --work) WORK="$2"; shift 2 ;;
     --model) MODEL="$2"; shift 2 ;;
+    --vocab) VOCAB="$2"; shift 2 ;;
     --force) FORCE=1; shift ;;
     *) die "알 수 없는 인자: $1" 2 ;;
   esac
@@ -55,10 +58,11 @@ t0=$(date +%s)
 echo "[1/4] 오디오 변환 (16kHz mono)"
 ffmpeg -v error -y -i "$AUDIO" -ac 1 -ar 16000 -c:a pcm_s16le "$WORK/audio.wav"
 
-echo "[2/4] 음성 인식 — whisperkit-cli transcribe ($MODEL, 한국어). 첫 실행은 모델 다운로드 포함"
+echo "[2/4] 음성 인식 — whisperkit-cli transcribe ($MODEL, 한국어${VOCAB:+, 고유명사 힌트 사용}). 첫 실행은 모델 다운로드 포함"
 t1=$(date +%s)
+PARG=(); [ -n "$VOCAB" ] && PARG=(--prompt "$VOCAB")
 whisperkit-cli transcribe --audio-path "$WORK/audio.wav" --model "$MODEL" --language ko \
-  --word-timestamps --report --report-path "$WORK" > "$WORK/transcribe.log" 2>&1 \
+  --word-timestamps --report --report-path "$WORK" ${PARG[@]+"${PARG[@]}"} > "$WORK/transcribe.log" 2>&1 \
   || die "음성 인식 실패 — 로그: $WORK/transcribe.log (--work 로 폴더를 지정하면 남습니다)"
 [ -f "$WORK/audio.json" ] || die "전사 리포트가 생성되지 않음: $WORK/audio.json"
 printf '      %d초\n' $(( $(date +%s) - t1 ))

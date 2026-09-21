@@ -4,7 +4,7 @@
 사용:
   transcripts.py list [DIR]   DIR(기본: config의 input_dir)의 txt를 표로 나열, 녹취록 없는 녹음(m4a 등)은 전사 대상으로 표시
   transcripts.py meta FILE    파일 하나의 일시·작성자·화자 통계를 표로 출력
-  transcripts.py check MD     정리된 회의록(md)의 분량 예산·녹취 말투를 점검(R-04)
+  transcripts.py check MD     정리된 회의록(md)의 분량 예산·녹취 말투·표시 규칙을 점검(R-04). 위반은 exit 1, 경고는 exit 0
   transcripts.py config                  데이터 폴더 위치와 context.md·feedback.md·설정 상태
   transcripts.py config get KEY          설정값 하나(없으면 빈 줄)
   transcripts.py config set KEY VALUE    KEY: input_dir | author | storytelling(on/off)
@@ -64,7 +64,7 @@ def fmt_when(h):
     when = (f"{s.year}년 {s.month}월 {s.day}일({h['weekday']}) "
             f"{s:%H:%M} ~ {e:%H:%M} (약 {h['minutes']}분)")
     if h.get("estimated"):
-        when += " (시작 시각 추정 — 확인 필요)"
+        when += " (확인 필요)"  # 회의록 1번에는 추론 설명 없이 표시만 남긴다
     return when
 
 
@@ -185,6 +185,8 @@ def cmd_meta(p):
     print(f"파일: {p}")
     print(f"제목: {h['title']}")
     print(f"일시: {fmt_when(h)}")
+    if h.get("estimated"):
+        print("주의: 시작 시각은 파일 시각에서 추정한 값 — 사용자에게 확인받고, 확인되면 '(확인 필요)'를 뗀다")
     print(f"작성자(녹음자): {h['author']}")
     print(f"본문: {len(lines)}행\n")
     st = speaker_stats(lines)
@@ -198,6 +200,12 @@ def cmd_meta(p):
 
 BUDGET = {"lines": 80, "chars": 3500, "tables": 2, "table_rows": 8,
           "bullets_per_sub": 5, "bullets_6": 6, "rows_7": 8, "bullets_8": 4}
+NEAR = 0.9  # 상한의 90%를 넘으면 위반은 아니지만 "상한 근접" 경고
+UNCERTAIN_RE = re.compile(r"\((?:[^()]*?)(?:확인 필요|추정|잠정|불명확|녹취 표기)[^()]*\)|미확인")
+LABEL_RE = re.compile(r"^\s*[*-]\s+\*\*([^*]+)\*\*\s*:")
+REASONING = ("추정", "이므로", "근거", "으로 보아", "때문에")
+LABELS_6 = ("핵심 제약", "선행 과제", "기회", "우리", "내부 참고", "리스크", "소통 채널",
+            "결정", "보류", "전제", "다음 회의")
 SPOKEN = ("거든요", "잖아요", "그러니까", "약간 ", " 이제 ", "그쵸", "네네", "어쨌든", "막 ")
 
 
@@ -205,13 +213,17 @@ def cmd_check(p):
     """회의록 md의 분량·말투 점검(R-04). 위반 0건이면 exit 0, 있으면 exit 1."""
     text = p.read_text(encoding="utf-8")
     lines = text.splitlines()
-    issues = []
+    issues, warnings = [], []
     nonblank = [l for l in lines if l.strip()]
     chars = sum(len(l.replace(" ", "")) for l in nonblank)
     if len(nonblank) > BUDGET["lines"]:
         issues.append(f"전체 {len(nonblank)}줄 > {BUDGET['lines']}줄")
+    elif len(nonblank) > BUDGET["lines"] * NEAR:
+        warnings.append(f"상한 근접: 전체 {len(nonblank)}줄 (상한 {BUDGET['lines']}줄) — 상한은 목표가 아니다")
     if chars > BUDGET["chars"]:
         issues.append(f"전체 {chars}자(공백 제외) > {BUDGET['chars']}자")
+    elif chars > BUDGET["chars"] * NEAR:
+        warnings.append(f"상한 근접: 전체 {chars}자 (상한 {BUDGET['chars']}자, 목표 2,800~3,000자) — 덜어낼 불릿을 찾는다")
     # 섹션 나누기
     sec, cur = {}, None
     for l in lines:
@@ -237,6 +249,17 @@ def cmd_check(p):
             issues.append(f"7번 {len(rows)-1}행 > {BUDGET['rows_7']}행")
         if name.startswith("8.") and len(bullets) > BUDGET["bullets_8"]:
             issues.append(f"8번 불릿 {len(bullets)}개 > {BUDGET['bullets_8']}개")
+        if name.startswith(("1.", "2.")):
+            for l in body:
+                hit = next((w for w in REASONING if w in l), None)
+                if hit:
+                    issues.append(f"{name[0]}번에 추론·근거 서술 '{hit}' — 값만 쓰고 모르면 '(확인 필요)': {l.strip()[:50]}…")
+        for b in bullets:
+            m = LABEL_RE.match(b)
+            if m and re.match(r"5-([2-9]|\d{2})", name) and m.group(1).strip() != "합의":
+                issues.append(f"{name} template에 없는 굵은 라벨 '{m.group(1)}' — 5번의 굵은 라벨은 '합의'뿐")
+            if m and name.startswith("6.") and not m.group(1).strip().startswith(LABELS_6):
+                warnings.append(f"6번 template에 없는 라벨 '{m.group(1)}' — feedback.md 규칙으로 정한 라벨이면 무시")
         for b in bullets:
             sents = [s for s in re.split(r"[.!?]\s", b) if s.strip()]
             if len(sents) >= 4 or len(b.strip()) > 160:
@@ -247,6 +270,14 @@ def cmd_check(p):
                     break
     if tables - (1 if any(k.startswith("3.") for k in sec) else 0) > BUDGET["tables"]:
         issues.append(f"표 {tables}개(참석대상 제외 {tables-1}) > {BUDGET['tables']}개")
+    for l in lines:
+        if len(UNCERTAIN_RE.findall(l)) >= 2:
+            issues.append(f"한 줄에 불확실성 표시 2개 이상 — 한 줄에 하나만: {l.strip()[:50]}…")
+        if re.search(r"참석자\s*\d+", l):
+            issues.append(f"본문에 '참석자 N' 라벨 — 이름·직함으로 쓰고 매핑 근거는 사용자 보고에: {l.strip()[:50]}…")
+    if "내부 참고(6번)" in text and not any(
+            "내부 참고" in l for k, body in sec.items() if k.startswith("6.") for l in body):
+        issues.append("5번에 '→ 내부 참고(6번)'이 있는데 6번에 '내부 참고' 불릿이 없음(끊긴 참조)")
     if "전문 별도 공유" not in text:
         issues.append("제목 아래 '녹취록: … (전문 별도 공유)' 줄 없음")
     quotes = text.count("「") + text.count("\u201c")
@@ -255,6 +286,8 @@ def cmd_check(p):
     body_tables = tables - (1 if any(k.startswith("3.") for k in sec) else 0)
     print(f"파일: {p}\n줄(공백 제외): {len(nonblank)} / 글자(공백 제외): {chars} / "
           f"표: {body_tables}개(참석대상 제외, 상한 {BUDGET['tables']})")
+    for w in warnings:
+        print("경고 — " + w)
     if not issues:
         print("분량·말투 점검: 위반 없음")
         return 0
